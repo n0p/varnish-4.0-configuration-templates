@@ -92,7 +92,8 @@ sub vcl_recv {
       req.method != "PATCH" &&
       req.method != "DELETE") {
     /* Non-RFC2616 or CONNECT which is weird. */
-    return (pipe);
+    /*Why send the packet upstream, while the visitor is using a non-valid HTTP method? */
+    return (synth(404, "Non-valid HTTP method!"));
   }
 
   # Implementing websocket support (https://www.varnish-cache.org/docs/4.0/users-guide/vcl-example-websockets.html)
@@ -160,7 +161,7 @@ sub vcl_recv {
   # like msnbot that send no-cache with every request.
     if (! (req.http.Via || req.http.User-Agent ~ "(?i)bot" || req.http.X-Purge)) {
       #set req.hash_always_miss = true; # Doesn't seems to refresh the object in the cache
-      return(purge); # Couple this with restart in vcl_purge and X-Purge header to avoid loops
+      return (purge); # Couple this with restart in vcl_purge and X-Purge header to avoid loops
     }
   }
 
@@ -258,7 +259,7 @@ sub vcl_hit {
 # if (!std.healthy(req.backend_hint) && (obj.ttl + obj.grace > 0s)) {
 #   return (deliver);
 # } else {
-#   return (fetch);
+#   return (miss);
 # }
 
   # We have no fresh fish. Lets look at the stale ones.
@@ -269,7 +270,7 @@ sub vcl_hit {
       return (deliver);
     } else {
       # No candidate for grace. Fetch a fresh object.
-      return(fetch);
+      return (fetch);
     }
   } else {
     # backend is sick - use full grace
@@ -329,16 +330,16 @@ sub vcl_backend_response {
     set beresp.http.Location = regsub(beresp.http.Location, ":[0-9]+", "");
   }
 
+  # Don't cache 50x responses
+  if (beresp.status == 500 || beresp.status == 502 || beresp.status == 503 || beresp.status == 504) {
+    return (abandon);
+  }
+
   # Set 2min cache if unset for static files
   if (beresp.ttl <= 0s || beresp.http.Set-Cookie || beresp.http.Vary == "*") {
     set beresp.ttl = 120s; # Important, you shouldn't rely on this, SET YOUR HEADERS in the backend
     set beresp.uncacheable = true;
     return (deliver);
-  }
-
-  # Don't cache 50x responses
-  if (beresp.status == 500 || beresp.status == 502 || beresp.status == 503 || beresp.status == 504) {
-    return (abandon);
   }
 
   # Allow stale content, in case the backend goes down.
@@ -380,10 +381,10 @@ sub vcl_deliver {
 
 sub vcl_purge {
   # Only handle actual PURGE HTTP methods, everything else is discarded
-  if (req.method != "PURGE") {
+  if (req.method == "PURGE") {
     # restart request
     set req.http.X-Purge = "Yes";
-    return(restart);
+    return (restart);
   }
 }
 
